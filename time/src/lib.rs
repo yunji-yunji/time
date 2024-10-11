@@ -112,6 +112,7 @@ mod time;
 mod utc_offset;
 pub mod util;
 mod weekday;
+mod fuzz_test;
 
 pub use time_core::convert;
 
