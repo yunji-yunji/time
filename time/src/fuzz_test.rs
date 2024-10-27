@@ -4,6 +4,8 @@ use std::vec::*;
 use std::println;
 use std::string::String;
 use crate::Duration;
+use crate::{Date, Time, UtcOffset, Month};
+
 use crate::ext::NumericalDuration;
 // use crate::{Date, Duration, Month, OffsetDateTime, PrimitiveDateTime, Time};
 // use crate::ext::numerical_duration::NumericalDuration;
@@ -38,7 +40,23 @@ fn quick_test() {
     let numerical2 = i64::from_ne_bytes([data[104], data[105], data[106], data[107], data[108], data[109], data[110], data[111]]);
     println!("weeks: {:?}\ndays: {:?}\nhours: {:?}\nminutes: {:?}\nseconds: {:?}\nmilliseconds: {:?}\nmicroseconds: {:?}\nnanoseconds: {:?}\nnanoseconds_i128: {:?}\nnanoseconds_i32: {:?}\nf64_num: {:?}\nf32_num: {:?}\nnumerical1: {:?}\nnumerical2: {:?}", weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds, nanoseconds_i128, nanoseconds_i32, f64_num, f32_num, numerical1, numerical2);
 
-    let res = run(weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds, nanoseconds_i128, nanoseconds_i32, f64_num, f32_num, numerical1, numerical2);
+    // month: Month,
+    let year = i16::from_ne_bytes([data[112], data[113]]) % 9998;
+    let year = year as i32;
+
+    let month_num = u8::from_ne_bytes([data[114]]) % 13;
+    let month_num = month_num.clamp(1, 12);
+    let month = Month::try_from(month_num).unwrap();
+
+    let day: u8 = u8::from_ne_bytes([data[115]]) % 32;
+    let day: u8 = day.clamp(1, 30);
+
+    let hour: u8 = u8::from_ne_bytes([data[116]]) % 24;
+    let minute: u8 = u8::from_ne_bytes([data[117]]) % 60;
+    let second: u8 = u8::from_ne_bytes([data[118]]) % 60;
+    println!("year: {:?}, month: {:?}, day: {:?}, hour: {:?}, minute: {:?}, second: {:?}", year, month, day, hour, minute, second);
+
+    let res = run(year, month, day, hour, minute, second, weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds, nanoseconds_i128, nanoseconds_i32, f64_num, f32_num, numerical1, numerical2);
     println!("- result: {:?} [{:?}]", res, data.len());
 }
 
@@ -74,7 +92,26 @@ fn my_fuzz() {
         let numerical2 = i64::from_ne_bytes([data[104], data[105], data[106], data[107], data[108], data[109], data[110], data[111]]);
         println!("weeks: {:?}\ndays: {:?}\nhours: {:?}\nminutes: {:?}\nseconds: {:?}\nmilliseconds: {:?}\nmicroseconds: {:?}\nnanoseconds: {:?}\nnanoseconds_i128: {:?}\nnanoseconds_i32: {:?}\nf64_num: {:?}\nf32_num: {:?}\nnumerical1: {:?}\nnumerical2: {:?}", weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds, nanoseconds_i128, nanoseconds_i32, f64_num, f32_num, numerical1, numerical2);
 
-        let res = run(weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds, nanoseconds_i128, nanoseconds_i32, f64_num, f32_num, numerical1, numerical2);
+        // month: Month,
+        let year = i16::from_ne_bytes([data[112], data[113]]) % 9998;
+        let year = year as i32;
+
+        let month_num = u8::from_ne_bytes([data[114]]) % 13;
+        let month_num = month_num.clamp(1, 12);
+        let month = Month::try_from(month_num).unwrap();
+
+        let day: u8 = u8::from_ne_bytes([data[115]]) % 32;
+        let day: u8 = day.clamp(1, 30);
+
+        let hour: u8 = u8::from_ne_bytes([data[116]]) % 24;
+        let minute: u8 = u8::from_ne_bytes([data[117]]) % 60;
+        let second: u8 = u8::from_ne_bytes([data[118]]) % 60;
+        println!("year: {:?}, month: {:?}, day: {:?}, hour: {:?}, minute: {:?}, second: {:?}", year, month, day, hour, minute, second);
+
+        let res = run(
+            year, month, day, hour, minute, second,
+            weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds, nanoseconds_i128, nanoseconds_i32, f64_num, f32_num, numerical1, numerical2
+        );
         println!("- result: {:?} [{:?}]", res, data.len());
     } else {
         panic!("input data not found");
@@ -83,6 +120,12 @@ fn my_fuzz() {
 
 // 39 + 1 fuzz target from bench
 fn run(
+    year: i32,
+    month: Month,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
     weeks: i64,
     days: i64,
     hours: i64,
@@ -98,6 +141,32 @@ fn run(
     numerical1: f64,
     numerical2: i64,
 ) {
+    // my own fuzz target
+    if let Ok(date) = Date::from_calendar_date(year, month, day) {
+        if let Ok(mut time) = Time::from_hms(hour, minute, second) {
+            let offset = UtcOffset::from_whole_seconds(minute as i32 * 60 + minute as i32 ).unwrap_or(UtcOffset::UTC);
+            let datetime = date.with_time(time).assume_offset(offset);
+
+            // Perform an offset adjustment that could internally trigger loops for handling DST or large ranges
+            let res1 = datetime.to_offset(UtcOffset::UTC);
+            println!("  - res1: {:?}", res1);
+
+            // Add large ranges to potentially trigger edge cases in loop-based calculations
+            let res2 = datetime.replace_year(year + 10000);  // Very large year increment
+            let res3 = datetime.replace_year(year - 10000);  // Very large year decrement
+            println!("  - res2: {:?}, res3: {:?}", res2, res3);
+            
+            // loop
+            for new_hour in 0..24 {
+                time = time.replace_hour(new_hour).expect("replace_hour failed");
+    
+                assert_eq!(time.hour(), new_hour);
+                assert!(time.minute() == minute);
+                assert!(time.second() == second);
+            }
+        }
+    }
+
     // +1 fuzz target
     let test = Duration::new(seconds, nanoseconds_i32);
     println!("Duration::new {:?}", test);
@@ -216,3 +285,6 @@ fn run(
 // "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,104,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,144,85,86,87,88,89,90,91,92,93,94,95,226,97,98,99,100,101,102,103,250,105,106,107,145,109,110,111,112,113"
 // "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,74,20,21,22,23,24,25,26,27,28,29,30,31,237,33,34,35,36,37,38,39,104,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,144,111,86,87,88,89,90,91,92,93,94,95,19,97,98,99,100,101,102,103,219,105,106,107,145,109,110,85,112,113"
 // "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,112,18,19,20,21,22,23,104,25,26,27,28,219,30,31,32,33,34,35,36,37,38,39,29,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,144,111,86,87,88,89,90,91,92,93,94,95,75,97,98,99,100,101,102,103,200,105,106,107,145,109,110,85,17,113"
+
+// cargo test --features parsing --features formatting --package time --lib -- fuzz_test::my_fuzz --exact --show-output data="246,172,65,190,25,47,159,110,124,132,30,92,37,74,247,20,186,111,242,26,37,119,41,111,174,75,189,37,137,118,194,157,28,4,207,105,198,205,93,188,81,11,158,217,111,5,12,134,228,150,148,35,60,9,229,175,14,64,144,59,81,179,85,53,67,75,40,88,242,177,103,106,84,119,13,208,87,182,79,147,218,128,156,124,34,165,181,124,146,157,77,43,184,48,129,10,91,223,190,106,58,148,127,224,241,234,254,240,193,10,199,236,181,25,170,223,154,131,24,73,27,73,226,219,9,221,106,179"
+// cargo test --features parsing --features formatting --package time --lib -- fuzz_test::my_fuzz --exact --show-output data="119,18,236,85,152,117,100,33,40,89,245,169,118,20,106,62,90,238,253,147,111,147,91,92,130,186,218,155,155,148,207,213,238,180,43,73,113,181,37,73,134,245,29,7,12,16,131,242,38,183,230,162,26,143,106,234,121,229,152,32,138,244,137,200,94,248,18,173,94,233,111,54,6,178,214,31,83,4,247,150,28,39,231,0,13,125,114,124,55,244,10,222,66,85,191,27,84,195,242,194,84,88,203,124,7,180,223,174,115,130,88,99,215,162,110,188,179,123,214"
